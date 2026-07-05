@@ -20,8 +20,8 @@ export const addWebsite = AsyncHandler(async (req, res) => {
   }
   let userWebsite = await prisma.userWebsite.findFirst({
     where: {
-      userId: id,
-      websiteId: web.id,
+      user_id: id,
+      website_id: web.id,
     },
   });
   if (userWebsite) {
@@ -36,9 +36,11 @@ export const addWebsite = AsyncHandler(async (req, res) => {
   }
   userWebsite = await prisma.userWebsite.create({
     data: {
-      userId: id,
-      websiteId: web.id,
-      interval,
+      user_id: id,
+      website_id: web.id,
+      interval_seconds: interval,
+      time_added: new Date(),
+      next_tick: new Date(Date.now() + interval * 1000),
     },
   });
 
