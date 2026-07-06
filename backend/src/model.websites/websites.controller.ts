@@ -1,56 +1,78 @@
 import prisma from "../db";
-import { ServerError } from "../utils/ApiError";
+import {
+  WebsiteAddSchema,
+  WebsiteStatusSchema,
+} from "../schemas/website.schema";
 import { ApiResponse } from "../utils/ApiResponse";
 import { AsyncHandler } from "../utils/AsyncHandler";
+import { handleZodError } from "../utils/ZodError";
 
 export const addWebsite = AsyncHandler(async (req, res) => {
   const { url, interval } = req.body;
   const { id } = req.userInfo;
-  let web = await prisma.website.findFirst({
-    where: {
-      url,
-    },
+  // can have a race condition
+  const { data, success, error } = WebsiteAddSchema.safeParse({
+    interval,
+    url,
   });
-  if (!web) {
-    web = await prisma.website.create({
-      data: {
-        url,
-      },
-    });
+  if (!success) {
+    throw handleZodError(error);
   }
-  let userWebsite = await prisma.userWebsite.findFirst({
+  const web = await prisma.website.upsert({
     where: {
-      user_id: id,
-      website_id: web.id,
+      url: data.url,
     },
+    update: {},
+    create: { url: data.url },
   });
-  if (userWebsite) {
-    res.status(409).json(
-      new ApiResponse({
-        message: "already monitors this website",
-        statusCode: 409,
-        data: userWebsite,
-      }),
-    );
-    return;
-  }
-  userWebsite = await prisma.userWebsite.create({
+  const userWebsite = await prisma.userWebsite.create({
     data: {
       user_id: id,
       website_id: web.id,
-      interval_seconds: interval,
+      interval_seconds: data.interval,
       time_added: new Date(),
-      next_tick: new Date(Date.now() + interval * 1000),
+      next_tick: new Date(Date.now() + data.interval * 1000),
+    },
+  });
+  res.status(201).json(
+    new ApiResponse({
+      message: "successfully created added the website to monitor",
+      statusCode: 201,
+      data: userWebsite,
+    }),
+  );
+});
+
+export const getStatus = AsyncHandler(async (req, res) => {
+  const { id } = req.userInfo;
+  const { website_id, duration } = req.query;
+  const { data, error, success } = WebsiteStatusSchema.safeParse({
+    website_id,
+    duration,
+  });
+  if (!success) {
+    throw handleZodError(error);
+  }
+
+  const status = await prisma.websiteTick.findMany({
+    where: {
+      website_id: data.website_id,
+      user_id: id,
+      timestamp: {
+        gte: new Date(Date.now() - data.duration),
+      },
+    },
+    orderBy: {
+      timestamp: "desc",
     },
   });
 
-  if (!userWebsite) {
-    throw new ServerError("unable to add website to monitor to db");
-  }
   res.status(200).json(
     new ApiResponse({
-      message: "successfully created added the website to monitor",
+      message: "successfully get the status",
+      data: status,
       statusCode: 200,
     }),
   );
+  return;
 });

@@ -50,9 +50,13 @@ model WebsiteTick {
   user_id    String
   latency_ms Int
   status     WebsiteStatus
-  createdAt  DateTime      @default(now())
+  timestamp  DateTime      @default(now())
   website    Website       @relation(fields: [website_id], references: [id])
   user       User          @relation(fields: [user_id], references: [id])
+
+  @@unique([id, timestamp])
+  @@index([user_id, website_id, timestamp])
+  @@map("website_tick")
 }
 
 enum WebsiteStatus {
