@@ -18,14 +18,16 @@ model User {
   password   String
   created_at DateTime @default(now())
 
-  websites UserWebsite[]
+  websites     UserWebsite[]
+  websiteTicks WebsiteTick[]
 }
 
 model Website {
   id           String        @id @default(uuid())
   url          String        @unique
-  created_at   DateTime      @default(now())
+  createdAt    DateTime      @default(now())
   user_website UserWebsite[]
+  websiteTicks WebsiteTick[]
 }
 
 model UserWebsite {
@@ -40,4 +42,21 @@ model UserWebsite {
   website Website @relation(fields: [website_id], references: [id])
 
   @@id([user_id, website_id])
+}
+
+model WebsiteTick {
+  id         String        @id
+  website_id String
+  user_id    String
+  latency_ms Int
+  status     WebsiteStatus
+  createdAt  DateTime      @default(now())
+  website    Website       @relation(fields: [website_id], references: [id])
+  user       User          @relation(fields: [user_id], references: [id])
+}
+
+enum WebsiteStatus {
+  Up
+  Down
+  Unknown
 }
