@@ -10,15 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
+	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/types"
 )
-
-type JobEvent struct {
-	UserID    string    `db:"user_id" json:"user_id"`
-	WebsiteID string    `db:"website_id" json:"website_id"`
-	URL       string    `db:"url" json:"url"`
-	Interval  int       `db:"interval_seconds" json:"interval_seconds"`
-	NextTick  time.Time `db:"next_tick" json:"next_tick"`
-}
 
 const (
 	SchedulerQueueKey = "scheduler:queue"
@@ -102,7 +95,7 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("query scheduler jobs: %w", err)
 	}
-	jobs, err := pgx.CollectRows(rows, pgx.RowToStructByName[JobEvent])
+	jobs, err := pgx.CollectRows(rows, pgx.RowToStructByName[job.JobEvent])
 
 	if err != nil {
 		return fmt.Errorf("collect scheduler jobs: %w", err)
@@ -121,8 +114,8 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 		err = sche.scheduleRedis.ZAdd(ctx,
 			sche.scheduleQueueKey,
 			redis.Z{
-				Score:  float64(job.NextTick.Unix()), // -> see this later
-				Member: b,
+				Score:  float64(job.NextTick.UnixMilli()), // -> see this later
+				Member: string(b),
 			},
 		).Err()
 		if err != nil {
@@ -145,7 +138,7 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			// TODO: perform scheduled work
-			now := time.Now().Unix()
+			now := time.Now().UnixMilli()
 			members, err := sche.scheduleRedis.ZRangeArgs(ctx, redis.ZRangeArgs{
 				Key:     sche.scheduleQueueKey,
 				Start:   "-inf",
