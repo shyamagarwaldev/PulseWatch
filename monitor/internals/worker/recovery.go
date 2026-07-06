@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -46,13 +47,18 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 				log.Printf("recovery worker: xautoclaim: %v", err)
 				continue
 			}
-
+			var wg sync.WaitGroup
 			for _, msg := range Messages {
-				if err := w.ProcessMessage(ctx, &msg, client); err != nil {
-					log.Printf("recovery worker: process: %s: %v", msg.ID, err)
-				}
+				wg.Add(1)
+				go func(m redis.XMessage) {
+					defer wg.Done()
+					if err := w.ProcessMessage(ctx, &m, client); err != nil {
+						log.Printf("recovery worker: process: %s: %v", m.ID, err)
+					}
+				}(msg)
 
 			}
+			wg.Wait()
 			start = st
 		}
 	}

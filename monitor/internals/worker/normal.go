@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,8 +19,6 @@ type NormalWorker struct {
 }
 
 func (w *NormalWorker) WorkerLoop(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
@@ -28,7 +27,7 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		default:
 			streams, err := w.streamRedis.XReadGroup(ctx, &redis.XReadGroupArgs{
 				Group:    Workers,
 				Consumer: fmt.Sprintf("NormalWorker: %v", hostname),
@@ -44,12 +43,18 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 				continue
 			}
 			for _, stream := range streams {
+				var wg sync.WaitGroup
 				for _, msg := range stream.Messages {
-					if err := w.ProcessMessage(ctx, &msg, client); err != nil {
-						log.Printf("normal worker: process %s: %v", msg.ID, err)
-					}
+					wg.Add(1)
+					go func(m redis.XMessage) {
+						defer wg.Done()
+						if err := w.ProcessMessage(ctx, &m, client); err != nil {
+							log.Printf("normal worker: process %s: %v", m.ID, err)
+						}
+					}(msg)
 
 				}
+				wg.Wait()
 			}
 		}
 
