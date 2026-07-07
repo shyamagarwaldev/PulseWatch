@@ -1,18 +1,18 @@
-import prisma from "../db";
+import prisma from "../../db";
 import bcrypt from "bcrypt";
-import { AsyncHandler } from "../utils/AsyncHandler";
-import { BadRequestError, UnauthorisedRequestError } from "../utils/ApiError";
-import { UserSignInSchema, UserSignUpSchema } from "../schemas/users.schema";
-import { handleZodError } from "../utils/ZodError";
-import CreateToken from "../utils/CreateToken";
-import { ApiResponse } from "../utils/ApiResponse";
+import { AsyncHandler } from "../../lib/AsyncHandler";
+import { BadRequestError, UnauthorisedRequestError } from "../../lib/ApiError";
+import { UserSignInSchema, UserSignUpSchema } from "../../schemas/users.schema";
+import { handleZodError, ZodCustomError } from "../../lib/ZodError";
+import { CreateToken } from "../../lib/Tokens";
+import { ApiResponse } from "../../lib/ApiResponse";
 import jwt from "jsonwebtoken";
-import type { UserJwtPayload } from "../types/auth";
+import { TokenType, type UserJwtPayload } from "../../types/auth";
 
 export const signup = AsyncHandler(async (req, res) => {
   const { data, error, success } = UserSignUpSchema.safeParse(req.body);
   if (!success) {
-    throw handleZodError(error);
+    throw new ZodCustomError(error);
   }
 
   const hashedPassword = await bcrypt.hash(data.password, 10);
@@ -34,7 +34,7 @@ export const signup = AsyncHandler(async (req, res) => {
 export const signin = AsyncHandler(async (req, res) => {
   const { data, error, success } = UserSignInSchema.safeParse(req.body);
   if (!success) {
-    throw handleZodError(error);
+    throw new ZodCustomError(error);
   }
   const user = await prisma.user.findUnique({
     where: {
@@ -49,8 +49,16 @@ export const signin = AsyncHandler(async (req, res) => {
     throw new BadRequestError("Invalid username or password");
   }
 
-  const accessToken = CreateToken(user.id, 60 * 60 * 24 * 1000);
-  const refreshToken = CreateToken(user.id, 7 * 60 * 60 * 24 * 1000);
+  const accessToken = CreateToken(
+    user.id,
+    60 * 60 * 24 * 1000,
+    TokenType.ACCESS,
+  );
+  const refreshToken = CreateToken(
+    user.id,
+    7 * 60 * 60 * 24 * 1000,
+    TokenType.REFRESH,
+  );
 
   const updatedUser = await prisma.user.update({
     where: {
@@ -95,6 +103,9 @@ export const refresh = AsyncHandler(async (req, res) => {
     process.env.TOKEN_SECRET!,
   ) as UserJwtPayload;
 
+  if (verifiedToken.type !== TokenType.REFRESH) {
+    throw new UnauthorisedRequestError("invalid refresh token");
+  }
   const user = await prisma.user.findUniqueOrThrow({
     where: {
       id: verifiedToken.id,
@@ -108,7 +119,11 @@ export const refresh = AsyncHandler(async (req, res) => {
   if (user.refresh_token !== refreshToken) {
     throw new UnauthorisedRequestError("invalid refresh token");
   }
-  const accessToken = CreateToken(verifiedToken.id, 60 * 60 * 24);
+  const accessToken = CreateToken(
+    verifiedToken.id,
+    60 * 60 * 24,
+    TokenType.ACCESS,
+  );
   res
     .cookie("accessToken", accessToken, {
       maxAge: 60 * 60 * 24 * 1000,

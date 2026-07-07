@@ -4,7 +4,7 @@ import type { ZodError } from "zod";
 
 export function handleZodError<T>(error: ZodError<T>) {
   const formattedZodError = error.issues.map((err) => ({
-    fields: err.path.join("."),
+    field: err.path.join("."),
     message: err.message,
   }));
   return {

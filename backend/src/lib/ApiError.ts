@@ -30,15 +30,37 @@ export class ApiError extends Error {
   }
 }
 
+export class ConflictError extends ApiError {
+  constructor(message: string) {
+    super({
+      message,
+      statusCode: 409,
+    });
+    this.name = "ConflictError";
+  }
+}
+
+export class ForbiddenError extends ApiError {
+  constructor(message = "Forbidden") {
+    super({
+      message,
+
+      statusCode: 403,
+    });
+    this.name = "ForbiddenError";
+  }
+}
 export class NotFoundError extends ApiError {
   constructor(resource: string) {
     super({ message: `${resource} not found`, statusCode: 404 });
+    this.name = "NotFoundError";
   }
 }
 
 export class BadRequestError extends ApiError {
   constructor(message: string) {
     super({ message, statusCode: 400 });
+    this.name = "BadRequestError";
   }
 }
 export class UnauthorisedRequestError extends ApiError {
@@ -47,6 +69,7 @@ export class UnauthorisedRequestError extends ApiError {
       message: `${message ? message : "Unauthorized"}`,
       statusCode: 401,
     });
+    this.name = "UnauthorisedRequestError";
   }
 }
 
@@ -56,5 +79,6 @@ export class ServerError extends ApiError {
       message: `${message ? message : "Unexpected Server Error"}`,
       statusCode: 500,
     });
+    this.name = "ServerError";
   }
 }

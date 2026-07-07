@@ -1,22 +1,18 @@
-import prisma from "../db";
+import prisma from "../../db";
 import {
   WebsiteAddSchema,
   WebsiteStatusSchema,
-} from "../schemas/website.schema";
-import { ApiResponse } from "../utils/ApiResponse";
-import { AsyncHandler } from "../utils/AsyncHandler";
-import { handleZodError } from "../utils/ZodError";
+} from "../../schemas/website.schema";
+import { ApiResponse } from "../../lib/ApiResponse";
+import { AsyncHandler } from "../../lib/AsyncHandler";
+import { ZodCustomError } from "../../lib/ZodError";
 
 export const addWebsite = AsyncHandler(async (req, res) => {
-  const { url, interval } = req.body;
   const { id } = req.userInfo;
   // can have a race condition
-  const { data, success, error } = WebsiteAddSchema.safeParse({
-    interval,
-    url,
-  });
+  const { data, success, error } = WebsiteAddSchema.safeParse(req.body);
   if (!success) {
-    throw handleZodError(error);
+    throw new ZodCustomError(error);
   }
   const web = await prisma.website.upsert({
     where: {
@@ -45,15 +41,10 @@ export const addWebsite = AsyncHandler(async (req, res) => {
 
 export const getStatus = AsyncHandler(async (req, res) => {
   const { id } = req.userInfo;
-  const { website_id, duration } = req.query;
-  const { data, error, success } = WebsiteStatusSchema.safeParse({
-    website_id,
-    duration,
-  });
+  const { data, error, success } = WebsiteStatusSchema.safeParse(req.query);
   if (!success) {
-    throw handleZodError(error);
+    throw new ZodCustomError(error);
   }
-
   const status = await prisma.websiteTick.findMany({
     where: {
       website_id: data.website_id,
