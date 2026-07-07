@@ -1,0 +1,92 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: ./backend/.env
+    networks:
+      - pulse_watch
+    depends_on:
+      db:
+        condition: service_healthy
+
+  valkey:
+    image: valkey/valkey:latest
+    volumes:
+      - valkey-data:/data
+    networks:
+      - pulse_watch
+  db:
+    image: postgres:17
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=mysecretpassword
+      - POSTGRES_DB=db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - pulse_watch
+  recovery-worker:
+    build:
+      context: ./monitor
+      dockerfile: ./docker/recovery.worker.Dockerfile
+    environment:
+      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
+      - REDIS_STREAM_ADDR=valkey:6379
+      - REDIS_PQ_ADDR=valkey:6379
+    networks:
+      - pulse_watch
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      backend:
+        condition: service_started
+
+  scheduler:
+    build:
+      context: ./monitor
+      dockerfile: ./docker/scheduler.Dockerfile
+    environment:
+      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
+      - REDIS_STREAM_ADDR=valkey:6379
+      - REDIS_PQ_ADDR=valkey:6379
+    networks:
+      - pulse_watch
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      backend:
+        condition: service_started
+  normal-worker:
+    build:
+      context: ./monitor
+      dockerfile: ./docker/normal.worker.Dockerfile
+    environment:
+      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
+      - REDIS_STREAM_ADDR=valkey:6379
+      - REDIS_PQ_ADDR=valkey:6379
+    networks:
+      - pulse_watch
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      backend:
+        condition: service_started
+volumes:
+  valkey-data:
+  db-data:
+
+networks:
+  pulse_watch:
