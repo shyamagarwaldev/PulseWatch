@@ -6,6 +6,7 @@ import {
 import { ApiResponse } from "../../lib/ApiResponse";
 import { AsyncHandler } from "../../lib/AsyncHandler";
 import { ZodCustomError } from "../../lib/ZodError";
+import { BadRequestError } from "../../lib/ApiError";
 
 export const addWebsite = AsyncHandler(async (req, res) => {
   const { id } = req.userInfo;
@@ -44,6 +45,17 @@ export const getStatus = AsyncHandler(async (req, res) => {
   const { data, error, success } = WebsiteStatusSchema.safeParse(req.query);
   if (!success) {
     throw new ZodCustomError(error);
+  }
+  const website = await prisma.userWebsite.findUnique({
+    where: {
+      user_id_website_id: {
+        user_id: id,
+        website_id: data.website_id,
+      },
+    },
+  });
+  if (!website) {
+    throw new BadRequestError("Invalid Website");
   }
   const status = await prisma.websiteTick.findMany({
     where: {
