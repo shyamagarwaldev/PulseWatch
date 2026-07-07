@@ -34,9 +34,8 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 	}
 	sche.db = conn
 	sche.scheduleRedis = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "mysecretpassword",
-		DB:       0,
+		Addr: os.Getenv("REDIS_PQ_ADDR"),
+		DB:   0,
 	})
 	s, err := sche.scheduleRedis.Ping(ctx).Result()
 	if err != nil {
@@ -50,8 +49,8 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 		return fmt.Errorf("clear scheduler queue: %w", err)
 	}
 	sche.streamRedis = redis.NewClient(&redis.Options{
-		Addr: "localhost:6380",
-		DB:   2,
+		Addr: os.Getenv("REDIS_STREAM_ADDR"),
+		DB:   1,
 	})
 	s, err = sche.streamRedis.Ping(ctx).Result()
 	if err != nil {

@@ -16,7 +16,7 @@ import (
 )
 
 type RecoveryWorker struct {
-	*BaseWorker
+	BaseWorker
 }
 
 func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {

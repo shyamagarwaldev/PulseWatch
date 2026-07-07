@@ -33,9 +33,8 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	}
 	base.db = conn
 	base.scheduleRedis = redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "mysecretpassword",
-		DB:       0,
+		Addr: os.Getenv("REDIS_PQ_ADDR"),
+		DB:   0,
 	})
 	s, err := base.scheduleRedis.Ping(ctx).Result()
 	if err != nil {
@@ -43,8 +42,8 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	}
 	fmt.Println("Successfully connected to scheduler Redis server!", s)
 	base.streamRedis = redis.NewClient(&redis.Options{
-		Addr: "localhost:6380",
-		DB:   2,
+		Addr: os.Getenv("REDIS_STREAM_ADDR"),
+		DB:   1,
 	})
 	s, err = base.streamRedis.Ping(ctx).Result()
 	if err != nil {

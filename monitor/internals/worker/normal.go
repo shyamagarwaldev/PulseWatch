@@ -15,7 +15,7 @@ import (
 )
 
 type NormalWorker struct {
-	*BaseWorker
+	BaseWorker
 }
 
 func (w *NormalWorker) WorkerLoop(ctx context.Context) {
