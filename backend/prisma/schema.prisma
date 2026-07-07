@@ -56,7 +56,6 @@ model WebsiteTick {
 
   @@unique([id, timestamp])
   @@index([user_id, website_id, timestamp])
-  @@map("website_tick")
 }
 
 enum WebsiteStatus {

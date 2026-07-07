@@ -6,8 +6,9 @@ import { UserSchema, type UserSchemaType } from "../schemas/users.schema";
 import { handleZodError } from "../utils/ZodError";
 
 export const signup = AsyncHandler(async (req, res) => {
-  const { username, password } = req.body;
-  const { data, error, success } = UserSchema.safeParse({ username, password });
+  const input = req.body;
+  const { data, error, success } = UserSchema.safeParse(input);
+
   if (!success) {
     throw handleZodError(error);
   }
