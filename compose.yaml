@@ -9,7 +9,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
-
+    ports:
+      - 3000:3000
   valkey:
     image: valkey/valkey:latest
     volumes:
@@ -36,10 +37,7 @@ services:
     build:
       context: ./monitor
       dockerfile: ./docker/recovery.worker.Dockerfile
-    environment:
-      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
-      - REDIS_STREAM_ADDR=valkey:6379
-      - REDIS_PQ_ADDR=valkey:6379
+    env_file: ./monitor/.env
     networks:
       - pulse_watch
     depends_on:
@@ -54,10 +52,7 @@ services:
     build:
       context: ./monitor
       dockerfile: ./docker/scheduler.Dockerfile
-    environment:
-      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
-      - REDIS_STREAM_ADDR=valkey:6379
-      - REDIS_PQ_ADDR=valkey:6379
+    env_file: ./monitor/.env
     networks:
       - pulse_watch
     depends_on:
@@ -71,10 +66,7 @@ services:
     build:
       context: ./monitor
       dockerfile: ./docker/normal.worker.Dockerfile
-    environment:
-      - DATABASE_URL=postgres://postgres:mysecretpassword@db:5432/db
-      - REDIS_STREAM_ADDR=valkey:6379
-      - REDIS_PQ_ADDR=valkey:6379
+    env_file: ./monitor/.env
     networks:
       - pulse_watch
     depends_on:
