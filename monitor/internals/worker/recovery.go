@@ -98,8 +98,7 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	defer resp.Body.Close()
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	latency := time.Since(start).Milliseconds() // in ms
-	monitorJob.NextTick = monitorJob.NextTick.Add(time.Duration(monitorJob.Interval) * time.Second)
-
+	monitorJob.NextTick = time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
 	status := "Down"
 	if success {
 		status = "Up"
