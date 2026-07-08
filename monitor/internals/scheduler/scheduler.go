@@ -10,21 +10,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/types"
-)
-
-const (
-	SchedulerQueueKey = "scheduler:queue"
-	JobStreamKey      = "jobs:stream"
+	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type Scheduler struct {
 	// *priority_queue --> redis sorted set
-	db               *pgx.Conn
-	scheduleRedis    *redis.Client
-	streamRedis      *redis.Client
-	scheduleQueueKey string
-	jobStreamKey     string
+	db  *pgx.Conn
+	rds *redis.Client
 }
 
 func (sche *Scheduler) Init(ctx context.Context) error {
@@ -32,32 +25,24 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
+	err = conn.Ping(ctx)
+	if err != nil {
+		return fmt.Errorf("ping db: %w", err)
+	}
+	fmt.Println("Successfully connected to postgres server!")
 	sche.db = conn
-	sche.scheduleRedis = redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_PQ_ADDR"),
-		DB:   0,
+	sche.rds = redis.NewClient(&redis.Options{
+		Addr: os.Getenv("REDIS_ADDR"),
 	})
-	s, err := sche.scheduleRedis.Ping(ctx).Result()
+	s, err := sche.rds.Ping(ctx).Result()
 	if err != nil {
 		return fmt.Errorf("ping scheduler redis: %w", err)
 	}
-	fmt.Println("Successfully connected to scheduler Redis server!", s)
-	sche.scheduleQueueKey = SchedulerQueueKey
-
-	err = sche.scheduleRedis.Del(ctx, sche.scheduleQueueKey).Err()
+	fmt.Println("Successfully connected to Redis server!", s)
+	err = sche.rds.Del(ctx, key.SchedulerQueueKey).Err()
 	if err != nil {
 		return fmt.Errorf("clear scheduler queue: %w", err)
 	}
-	sche.streamRedis = redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_STREAM_ADDR"),
-		DB:   1,
-	})
-	s, err = sche.streamRedis.Ping(ctx).Result()
-	if err != nil {
-		return fmt.Errorf("ping stream redis: %w", err)
-	}
-	fmt.Println("Successfully connected to Redis stream server!", s)
-	sche.jobStreamKey = JobStreamKey
 	return nil
 }
 
@@ -69,8 +54,7 @@ func (sche *Scheduler) Run() {
 	}
 
 	defer sche.db.Close(ctx)
-	defer sche.scheduleRedis.Close()
-	defer sche.streamRedis.Close()
+	defer sche.rds.Close()
 
 	if err := sche.LoadJobs(ctx); err != nil {
 		log.Fatal(err)
@@ -110,8 +94,8 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 				err,
 			)
 		}
-		err = sche.scheduleRedis.ZAdd(ctx,
-			sche.scheduleQueueKey,
+		err = sche.rds.ZAdd(ctx,
+			key.SchedulerQueueKey,
 			redis.Z{
 				Score:  float64(job.NextTick.UnixMilli()), // -> see this later
 				Member: string(b),
@@ -138,8 +122,8 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 		case <-ticker.C:
 			// TODO: perform scheduled work
 			now := time.Now().UnixMilli()
-			members, err := sche.scheduleRedis.ZRangeArgs(ctx, redis.ZRangeArgs{
-				Key:     sche.scheduleQueueKey,
+			members, err := sche.rds.ZRangeArgs(ctx, redis.ZRangeArgs{
+				Key:     key.SchedulerQueueKey,
 				Start:   "-inf",
 				Stop:    fmt.Sprintf("%d", now),
 				ByScore: true,
@@ -153,27 +137,28 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					_, err := sche.streamRedis.XAdd(ctx, &redis.XAddArgs{
-						Stream: sche.jobStreamKey,
-						Values: map[string]any{
+					var jobMonitor job.JobEvent
+					err := json.Unmarshal([]byte(m), &jobMonitor)
+					if err != nil {
+						log.Printf("scheduler: unmarshal job payload: %v", err)
+						continue
+					}
+					tx := sche.rds.TxPipeline()
+					tx.XAdd(ctx, &redis.XAddArgs{
+						Stream: key.JobStreamKey,
+						Values: map[string]string{
 							"payload": m,
 						},
-					}).Result()
-					if err != nil {
-						log.Printf("scheduler: enqueue job into stream: %v", err)
-						continue
-					}
-					err = sche.scheduleRedis.ZRem(ctx,
-						sche.scheduleQueueKey,
+					})
+					tx.ZRem(ctx,
+						key.SchedulerQueueKey,
 						m,
-					).Err()
-					if err != nil {
-						log.Printf(
-							"scheduler: remove dispatched job from queue: %v",
-							err,
-						)
+					)
+					if _, err = tx.Exec(ctx); err != nil {
+						log.Printf("scheduler: Tx err: %v,", err)
 						continue
 					}
+
 				}
 			}
 		case <-ctx.Done():

@@ -8,52 +8,49 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/types"
-)
-
-const (
-	SchedulerQueueKey = "scheduler:queue"
-	JobStreamKey      = "jobs:stream"
-	Workers           = "Workers"
-	// UniqueViolationCode = "23505"
+	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type BaseWorker struct {
-	db            *pgx.Conn
-	scheduleRedis *redis.Client
-	streamRedis   *redis.Client
+	db  *pgxpool.Pool
+	rds *redis.Client
 }
 
 func (base *BaseWorker) Init(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	// conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	config, err := pgxpool.ParseConfig(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return err
+	}
+
+	config.MaxConns = 20
+	config.MinConns = 5
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
-	base.db = conn
-	base.scheduleRedis = redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_PQ_ADDR"),
+	err = pool.Ping(ctx)
+	if err != nil {
+		return fmt.Errorf("ping db: %w", err)
+	}
+	fmt.Println("Successfully connected to postgres server!")
+	base.db = pool
+	base.rds = redis.NewClient(&redis.Options{
+		Addr: os.Getenv("REDIS_ADDR"),
 		DB:   0,
 	})
-	s, err := base.scheduleRedis.Ping(ctx).Result()
+	s, err := base.rds.Ping(ctx).Result()
 	if err != nil {
 		return fmt.Errorf("ping scheduler redis: %w", err)
 	}
-	fmt.Println("Successfully connected to scheduler Redis server!", s)
-	base.streamRedis = redis.NewClient(&redis.Options{
-		Addr: os.Getenv("REDIS_STREAM_ADDR"),
-		DB:   1,
-	})
-	s, err = base.streamRedis.Ping(ctx).Result()
-	if err != nil {
-		return fmt.Errorf("ping stream redis: %w", err)
-	}
-	fmt.Println("Successfully connected to Redis stream server!", s)
-	err = base.streamRedis.XGroupCreateMkStream(
+	fmt.Println("Successfully connected to Redis server!", s)
+	err = base.rds.XGroupCreateMkStream(
 		ctx,
-		JobStreamKey,
-		Workers,
+		key.JobStreamKey,
+		key.Workers,
 		"$",
 	).Err()
 
@@ -63,19 +60,7 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	return nil
 }
 
-func (w *BaseWorker) RSAck(ctx context.Context, msg *redis.XMessage) error {
-	err := w.streamRedis.XAck(ctx,
-		JobStreamKey,
-		Workers,
-		msg.ID,
-	).Err()
-	if err != nil {
-		return fmt.Errorf("ack message: %v", err)
-	}
-	return nil
-}
-
-func (w *BaseWorker) ReEnqueue(ctx context.Context, job *job.JobEvent) error {
+func (w *BaseWorker) CacheUpdateAndStreamAck(ctx context.Context, job *job.JobEvent, msg *redis.XMessage) error {
 	b, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf(
@@ -85,15 +70,22 @@ func (w *BaseWorker) ReEnqueue(ctx context.Context, job *job.JobEvent) error {
 			err,
 		)
 	}
-	err = w.scheduleRedis.ZAdd(ctx,
-		SchedulerQueueKey,
+	tx := w.rds.TxPipeline()
+	tx.ZAdd(ctx,
+		key.SchedulerQueueKey,
 		redis.Z{
 			Score:  float64(job.NextTick.UnixMilli()),
 			Member: b,
 		},
-	).Err()
-	if err != nil {
-		return fmt.Errorf("requeue job: %w", err)
+	)
+	tx.XAck(ctx,
+		key.JobStreamKey,
+		key.Workers,
+		msg.ID,
+	)
+	tx.XDel(ctx, key.JobStreamKey, msg.ID)
+	if _, err := tx.Exec(ctx); err != nil {
+		return fmt.Errorf("redis transaction: %w,", err)
 	}
 	return nil
 }

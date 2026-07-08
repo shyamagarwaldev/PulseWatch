@@ -12,7 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/types"
+	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type RecoveryWorker struct {
@@ -32,9 +33,9 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			Messages, st, err := w.streamRedis.XAutoClaim(ctx, &redis.XAutoClaimArgs{
-				Stream:   JobStreamKey,
-				Group:    Workers,
+			messages, st, err := w.rds.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+				Stream:   key.JobStreamKey,
+				Group:    key.Workers,
 				Consumer: fmt.Sprintf("RecoveryWorker: %v", hostname),
 				MinIdle:  120 * time.Second,
 				Start:    start,
@@ -48,7 +49,7 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 				continue
 			}
 			var wg sync.WaitGroup
-			for _, msg := range Messages {
+			for _, msg := range messages {
 				wg.Add(1)
 				go func(m redis.XMessage) {
 					defer wg.Done()
@@ -69,9 +70,9 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	if !ok {
 		return fmt.Errorf("invalid payload")
 	}
-	var job job.JobEvent
-	if err := json.Unmarshal([]byte(payload), &job); err != nil {
-		return fmt.Errorf("error in json unmarsharl: %w", err)
+	var monitorJob job.JobEvent
+	if err := json.Unmarshal([]byte(payload), &monitorJob); err != nil {
+		return fmt.Errorf("unmarsharl payload: %w", err)
 	}
 	var websiteID, userID string
 	err := w.db.QueryRow(ctx,
@@ -80,13 +81,13 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	).Scan(&userID, &websiteID)
 	switch err {
 	case nil:
-		return w.RecoverIncompleteProcessing(ctx, userID, websiteID, &job, msg)
+		return w.RecoverIncompleteProcessing(ctx, &monitorJob, msg)
 	case pgx.ErrNoRows:
 	default:
 		return fmt.Errorf("idempotency query: %w", err)
 	}
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, job.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, monitorJob.URL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
@@ -97,66 +98,38 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	defer resp.Body.Close()
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	latency := time.Since(start).Milliseconds() // in ms
-	job.NextTick = job.NextTick.Add(time.Duration(job.Interval) * time.Second)
+	monitorJob.NextTick = monitorJob.NextTick.Add(time.Duration(monitorJob.Interval) * time.Second)
 
-	status := "DOWN"
+	status := "Down"
 	if success {
-		status = "UP"
+		status = "Up"
 	}
 
-	if err := w.DbUpdateAndInsert(ctx, msg, &job, int64(latency), status); err != nil {
-		return fmt.Errorf("ProcessMessage DbUpdateAndInsert: %w", err)
+	if err := w.DbUpdateAndInsert(ctx, msg, &monitorJob, int64(latency), status); err != nil {
+		return fmt.Errorf("DbUpdateAndInsert: %w", err)
 	}
 
-	if err := w.ReEnqueue(ctx, &job); err != nil {
-		return fmt.Errorf("ProcessMessage ReEnqueue: %w", err)
-	}
-
-	if err := w.RSAck(ctx, msg); err != nil {
-		return fmt.Errorf("ProcessMessage RSAck: %w", err)
+	if err := w.CacheUpdateAndStreamAck(ctx, &monitorJob, msg); err != nil {
+		return fmt.Errorf("CacheUpdateAndStreamAck: %w", err)
 	}
 
 	return nil
 }
 
-func (w *RecoveryWorker) RecoverIncompleteProcessing(ctx context.Context, userID, websiteID string, job *job.JobEvent, msg *redis.XMessage) error {
+func (w *RecoveryWorker) RecoverIncompleteProcessing(ctx context.Context, monitorJob *job.JobEvent, msg *redis.XMessage) error {
 	var nextTick time.Time
 	err := w.db.QueryRow(ctx,
 		`SELECT next_tick FROM "UserWebsite" WHERE user_id=$1 AND website_id=$2`,
-		userID, websiteID,
+		monitorJob.UserID, monitorJob.WebsiteID,
 	).Scan(&nextTick)
 
 	if err != nil {
-		return fmt.Errorf("RecoverIncompleteProcessing: Query from UserWebsite : %w", err)
+		return fmt.Errorf("RecoverIncompleteProcessing: CacheUpdateAndStreamAck: Query from UserWebsite : %w", err)
 	}
-	job.NextTick = nextTick
-	b, err := json.Marshal(job)
-	if err != nil {
-		return fmt.Errorf(
-			"marshal job (user=%s website=%s): %w",
-			job.UserID,
-			job.WebsiteID,
-			err,
-		)
+	monitorJob.NextTick = nextTick
+	if err = w.CacheUpdateAndStreamAck(ctx, monitorJob, msg); err != nil {
+		return fmt.Errorf("RecoverIncompleteProcessing: CacheUpdateAndStreamAck: %w", err)
 	}
-	err = w.scheduleRedis.ZScore(ctx,
-		SchedulerQueueKey,
-		string(b),
-	).Err()
-
-	switch {
-	case err == redis.Nil:
-		if err := w.ReEnqueue(ctx, job); err != nil {
-			return fmt.Errorf("RecoverIncompleteProcessing ReEnqueue: %w", err)
-		}
-	case err != nil:
-		return fmt.Errorf("redis scheduler element exist: %w", err)
-	}
-
-	if err := w.RSAck(ctx, msg); err != nil {
-		return fmt.Errorf("RecoverIncompleteProcessing RSAck: %w", err)
-	}
-
 	return nil
 }
 
@@ -167,9 +140,9 @@ func (w *RecoveryWorker) Run() {
 		log.Fatal(err)
 	}
 
-	defer w.db.Close(ctx)
-	defer w.scheduleRedis.Close()
-	defer w.streamRedis.Close()
+	// defer w.db.Close(ctx)
+	defer w.db.Close()
+	defer w.rds.Close()
 
 	w.WorkerLoop(ctx)
 }
