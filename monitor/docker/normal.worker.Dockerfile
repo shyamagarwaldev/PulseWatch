@@ -4,7 +4,9 @@ WORKDIR /app
 
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
+COPY ./internals/worker ./internals/worker
+COPY  ./internals/shared ./internals/shared
+COPY ./cmd/normal-worker ./cmd/normal-worker
 RUN CGO_ENABLED=0 go build -o normal-worker ./cmd/normal-worker
 
 FROM alpine:latest 

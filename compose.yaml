@@ -76,6 +76,20 @@ services:
         condition: service_started
       backend:
         condition: service_started
+  outbox-worker:
+    build:
+      context: ./monitor
+      dockerfile: ./docker/outbox.Dockerfile
+    env_file: ./monitor/.env
+    networks:
+      - pulse_watch
+    depends_on:
+      db:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      backend:
+        condition: service_started
 volumes:
   valkey-data:
   db-data:
