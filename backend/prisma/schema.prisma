@@ -21,6 +21,7 @@ model User {
 
   websites     UserWebsite[]
   websiteTicks WebsiteTick[]
+  outBoxes     OutBox[]
 }
 
 model Website {
@@ -29,6 +30,7 @@ model Website {
   createdAt    DateTime      @default(now())
   user_website UserWebsite[]
   websiteTicks WebsiteTick[]
+  outBoxes     OutBox[]
 }
 
 model UserWebsite {
@@ -39,24 +41,52 @@ model UserWebsite {
   next_tick        DateTime
   last_tick        DateTime?
 
-  user    User    @relation(fields: [user_id], references: [id])
-  website Website @relation(fields: [website_id], references: [id])
+  user         User          @relation(fields: [user_id], references: [id])
+  website      Website       @relation(fields: [website_id], references: [id])
+  websiteTicks WebsiteTick[]
 
   @@id([user_id, website_id])
 }
 
 model WebsiteTick {
-  id         String        @id
-  website_id String
-  user_id    String
-  latency_ms Int
-  status     WebsiteStatus
-  timestamp  DateTime      @default(now())
-  website    Website       @relation(fields: [website_id], references: [id])
-  user       User          @relation(fields: [user_id], references: [id])
+  id           String        @id
+  website_id   String
+  user_id      String
+  latency_ms   Int
+  status       WebsiteStatus
+  timestamp    DateTime      @default(now())
+  website      Website       @relation(fields: [website_id], references: [id])
+  user         User          @relation(fields: [user_id], references: [id])
+  user_website UserWebsite   @relation(fields: [user_id, website_id], references: [user_id, website_id], onDelete: Cascade)
 
   @@unique([id, timestamp])
   @@index([user_id, website_id, timestamp])
+}
+
+model OutBox {
+  id          String     @id
+  user_id     String
+  website_id  String
+  task        OutBoxTask
+  task_status TaskStatus
+  createdAt   DateTime   @default(now())
+  updated_at  DateTime?
+  user        User       @relation(fields: [user_id], references: [id])
+  website     Website    @relation(fields: [website_id], references: [id])
+
+  @@index([task_status, task, updated_at])
+}
+
+enum TaskStatus {
+  UnProcessed
+  Processed
+  Processing
+}
+
+enum OutBoxTask {
+  Add
+  Update
+  Delete
 }
 
 enum WebsiteStatus {

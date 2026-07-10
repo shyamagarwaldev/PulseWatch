@@ -3,7 +3,6 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -30,7 +29,7 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping db: %w", err)
 	}
-	fmt.Println("Successfully connected to postgres server!")
+	log.Printf("Successfully connected to postgres server!")
 	sche.db = pool
 	sche.rds = redis.NewClient(&redis.Options{
 		Addr: os.Getenv("REDIS_ADDR"),
@@ -39,7 +38,7 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping scheduler redis: %w", err)
 	}
-	fmt.Println("Successfully connected to Redis server!", s)
+	log.Printf("Successfully connected to Redis server!: %v", s)
 	tx := sche.rds.TxPipeline()
 	tx.Del(ctx, sh.HashKey)
 	tx.Del(ctx, sh.SchedulerQueueKey)
@@ -85,6 +84,9 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 
 	if err != nil {
 		return fmt.Errorf("collect scheduler jobs: %w", err)
+	}
+	if len(jobs) == 0 {
+		return nil
 	}
 	tx := sche.rds.TxPipeline()
 	// O(M * log M)
@@ -142,17 +144,6 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 				case <-ctx.Done():
 					return
 				default:
-					_, err := sche.rds.HGet(ctx, sh.HashKey, el).Result()
-					if errors.Is(err, redis.Nil) {
-						if err = sche.rds.ZRem(ctx, sh.SchedulerQueueKey, el).Err(); err != nil {
-							log.Printf("scheduler: Zrem err as el not exist %v", err)
-						}
-						continue
-					}
-					if err != nil {
-						log.Printf("scheduler: HGet: %v", err)
-						continue
-					}
 					tx := sche.rds.TxPipeline()
 					tx.XAdd(ctx, &redis.XAddArgs{
 						Stream: sh.JobStreamKey,
