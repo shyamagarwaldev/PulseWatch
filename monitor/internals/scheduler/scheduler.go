@@ -75,11 +75,13 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 			uw.next_tick
 		FROM "UserWebsite" uw
 		JOIN "Website" w
-		ON uw.website_id = w.id;
+		ON uw.website_id = w.id
+		WHERE uw.isActive = true;
     `)
 	if err != nil {
 		return fmt.Errorf("query scheduler jobs: %w", err)
 	}
+	defer rows.Close()
 	jobs, err := pgx.CollectRows(rows, pgx.RowToStructByName[sh.JobEvent])
 
 	if err != nil {
