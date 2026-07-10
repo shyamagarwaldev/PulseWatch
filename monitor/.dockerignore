@@ -1,0 +1,43 @@
+# Node / JavaScript
+node_modules
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+venv/
+env/
+.venv/
+
+# Environment
+.env
+.env.*
+.env.local
+
+# Build artifacts
+dist/
+build/
+coverage/
+*.log
+tmp/
+uploads/
+
+# Docker / Git
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+
+# IDEs and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Misc
+*.pem
+*.key

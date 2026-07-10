@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
-	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+
+	sh "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type NormalWorker struct {
@@ -30,9 +31,9 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 			return
 		default:
 			streams, err := w.rds.XReadGroup(ctx, &redis.XReadGroupArgs{
-				Group:    key.Workers,
+				Group:    sh.Workers,
 				Consumer: fmt.Sprintf("NormalWorker: %v", hostname),
-				Streams:  []string{key.JobStreamKey, ">"},
+				Streams:  []string{sh.JobStreamKey, ">"},
 				Count:    10,
 				Block:    5 * time.Second,
 			}).Result()
@@ -63,13 +64,20 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 }
 
 func (w *NormalWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage, client *http.Client) error {
-	payload, ok := msg.Values["payload"].(string)
+	el, ok := msg.Values["payload"].(string)
 	if !ok {
 		return fmt.Errorf("invalid payload")
 	}
-	var monitorJob job.JobEvent
+	var monitorJob sh.JobEvent
+	payload, err := w.rds.HGet(ctx, sh.HashKey, el).Result()
+	if errors.Is(err, redis.Nil) {
+		return w.AckAndDelete(ctx, msg)
+	}
+	if err != nil {
+		return fmt.Errorf("monitor data hash access: %w", err)
+	}
 	if err := json.Unmarshal([]byte(payload), &monitorJob); err != nil {
-		return fmt.Errorf("unmarsharl payload: %w", err)
+		return fmt.Errorf("unmarshal payload: %w", err)
 	}
 	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, monitorJob.URL, nil)
@@ -83,17 +91,17 @@ func (w *NormalWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage, 
 	defer resp.Body.Close()
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	latency := time.Since(start).Milliseconds() // in ms
-	monitorJob.NextTick = time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
+	nextTick := time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
 	status := "Down"
 	if success {
 		status = "Up"
 	}
 
-	if err := w.DbUpdateAndInsert(ctx, msg, &monitorJob, int64(latency), status); err != nil {
+	if err := w.DbUpdateAndInsert(ctx, msg, nextTick, &monitorJob, int64(latency), status); err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: %w", err)
 	}
 
-	if err := w.CacheUpdateAndStreamAck(ctx, &monitorJob, msg); err != nil {
+	if err := w.CacheUpdateAndStreamAck(ctx, nextTick, msg, el); err != nil {
 		return fmt.Errorf("CacheUpdateAndStreamAck: %w", err)
 	}
 

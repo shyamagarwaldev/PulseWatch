@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,8 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
-	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+
+	sh "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type RecoveryWorker struct {
@@ -34,8 +35,8 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			messages, st, err := w.rds.XAutoClaim(ctx, &redis.XAutoClaimArgs{
-				Stream:   key.JobStreamKey,
-				Group:    key.Workers,
+				Stream:   sh.JobStreamKey,
+				Group:    sh.Workers,
 				Consumer: fmt.Sprintf("RecoveryWorker: %v", hostname),
 				MinIdle:  120 * time.Second,
 				Start:    start,
@@ -66,23 +67,29 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 }
 
 func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage, client *http.Client) error {
-	payload, ok := msg.Values["payload"].(string)
+	el, ok := msg.Values["payload"].(string)
 	if !ok {
 		return fmt.Errorf("invalid payload")
 	}
-	var monitorJob job.JobEvent
-	if err := json.Unmarshal([]byte(payload), &monitorJob); err != nil {
-		return fmt.Errorf("unmarsharl payload: %w", err)
+	payload, err := w.rds.HGet(ctx, sh.HashKey, el).Result()
+	if errors.Is(err, redis.Nil) {
+		return w.AckAndDelete(ctx, msg)
 	}
-	var websiteID, userID string
-	err := w.db.QueryRow(ctx,
-		`SELECT user_id,website_id FROM "WebsiteTick" WHERE id=$1`,
+	if err != nil {
+		return fmt.Errorf("monitor data hash access: %w", err)
+	}
+	var monitorJob sh.JobEvent
+	if err := json.Unmarshal([]byte(payload), &monitorJob); err != nil {
+		return fmt.Errorf("unmarshal payload: %w", err)
+	}
+	err = w.db.QueryRow(ctx,
+		`SELECT 1 FROM "WebsiteTick" WHERE id=$1`,
 		msg.ID,
-	).Scan(&userID, &websiteID)
-	switch err {
-	case nil:
-		return w.RecoverIncompleteProcessing(ctx, &monitorJob, msg)
-	case pgx.ErrNoRows:
+	).Scan(new(int))
+	switch {
+	case err == nil:
+		return w.RecoverIncompleteProcessing(ctx, &monitorJob, msg, el)
+	case errors.Is(err, pgx.ErrNoRows):
 	default:
 		return fmt.Errorf("idempotency query: %w", err)
 	}
@@ -98,35 +105,39 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	defer resp.Body.Close()
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
 	latency := time.Since(start).Milliseconds() // in ms
-	monitorJob.NextTick = time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
+	nextTick := time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
 	status := "Down"
 	if success {
 		status = "Up"
 	}
 
-	if err := w.DbUpdateAndInsert(ctx, msg, &monitorJob, int64(latency), status); err != nil {
+	if err := w.DbUpdateAndInsert(ctx, msg, nextTick, &monitorJob, int64(latency), status); err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: %w", err)
 	}
 
-	if err := w.CacheUpdateAndStreamAck(ctx, &monitorJob, msg); err != nil {
+	if err := w.CacheUpdateAndStreamAck(ctx, nextTick, msg, el); err != nil {
 		return fmt.Errorf("CacheUpdateAndStreamAck: %w", err)
 	}
 
 	return nil
 }
 
-func (w *RecoveryWorker) RecoverIncompleteProcessing(ctx context.Context, monitorJob *job.JobEvent, msg *redis.XMessage) error {
+func (w *RecoveryWorker) RecoverIncompleteProcessing(ctx context.Context, monitorJob *sh.JobEvent, msg *redis.XMessage, el string) error {
 	var nextTick time.Time
 	err := w.db.QueryRow(ctx,
 		`SELECT next_tick FROM "UserWebsite" WHERE user_id=$1 AND website_id=$2`,
 		monitorJob.UserID, monitorJob.WebsiteID,
 	).Scan(&nextTick)
-
+	// Defensive check.
+	// Normally UserWebsite is soft deleted, so this path
+	// should only occur if data has already been cleaned up.
+	if errors.Is(err, pgx.ErrNoRows) {
+		return w.AckAndDelete(ctx, msg)
+	}
 	if err != nil {
 		return fmt.Errorf("RecoverIncompleteProcessing: CacheUpdateAndStreamAck: Query from UserWebsite : %w", err)
 	}
-	monitorJob.NextTick = nextTick
-	if err = w.CacheUpdateAndStreamAck(ctx, monitorJob, msg); err != nil {
+	if err = w.CacheUpdateAndStreamAck(ctx, nextTick, msg, el); err != nil {
 		return fmt.Errorf("RecoverIncompleteProcessing: CacheUpdateAndStreamAck: %w", err)
 	}
 	return nil
@@ -139,7 +150,6 @@ func (w *RecoveryWorker) Run() {
 		log.Fatal(err)
 	}
 
-	// defer w.db.Close(ctx)
 	defer w.db.Close()
 	defer w.rds.Close()
 

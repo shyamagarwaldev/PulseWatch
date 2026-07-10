@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,8 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
-	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+	sh "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type BaseWorker struct {
@@ -49,8 +47,8 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	fmt.Println("Successfully connected to Redis server!", s)
 	err = base.rds.XGroupCreateMkStream(
 		ctx,
-		key.JobStreamKey,
-		key.Workers,
+		sh.JobStreamKey,
+		sh.Workers,
 		"$",
 	).Err()
 
@@ -60,37 +58,28 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	return nil
 }
 
-func (w *BaseWorker) CacheUpdateAndStreamAck(ctx context.Context, job *job.JobEvent, msg *redis.XMessage) error {
-	b, err := json.Marshal(job)
+func (w *BaseWorker) CacheUpdateAndStreamAck(ctx context.Context, nextTick time.Time, msg *redis.XMessage, el string) error {
+	exists, err := w.rds.HExists(ctx, sh.HashKey, el).Result()
 	if err != nil {
-		return fmt.Errorf(
-			"marshal job (user=%s website=%s): %w",
-			job.UserID,
-			job.WebsiteID,
-			err,
-		)
+		return fmt.Errorf("HExists: %w", err)
 	}
 	tx := w.rds.TxPipeline()
-	tx.ZAdd(ctx,
-		key.SchedulerQueueKey,
-		redis.Z{
-			Score:  float64(job.NextTick.UnixMilli()),
-			Member: b,
-		},
-	)
-	tx.XAck(ctx,
-		key.JobStreamKey,
-		key.Workers,
-		msg.ID,
-	)
-	tx.XDel(ctx, key.JobStreamKey, msg.ID)
+	if exists {
+		tx.ZAdd(ctx, sh.SchedulerQueueKey, redis.Z{
+			Score:  float64(nextTick.UnixMilli()),
+			Member: el,
+		})
+	}
+	tx.XAck(ctx, sh.JobStreamKey, sh.Workers, msg.ID)
+	tx.XDel(ctx, sh.JobStreamKey, msg.ID)
+
 	if _, err := tx.Exec(ctx); err != nil {
-		return fmt.Errorf("redis transaction: %w,", err)
+		return fmt.Errorf("redis transaction: %w", err)
 	}
 	return nil
 }
 
-func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage, job *job.JobEvent, latency int64, status string) error {
+func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage, nextTick time.Time, monitorJob *sh.JobEvent, latency int64, status string) error {
 	tx, err := w.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: begin transaction: %w", err)
@@ -108,20 +97,15 @@ func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage,
 				($1,$2,$3,$4,$5)
 				`,
 		msg.ID,
-		job.WebsiteID,
-		job.UserID,
+		monitorJob.WebsiteID,
+		monitorJob.UserID,
 		latency,
 		status,
 	)
 	if err != nil {
-		// var pgErr *pgconn.PgError
-		// if errors.As(err, &pgErr) && pgErr.Code == UniqueViolationCode {
-		// 	fmt.Printf("DbUpdateAndInsert: Duplicate Key Conflict handled: %v", err)
-		// 	return errors.New("duplicate processing")
-		// }
 		return fmt.Errorf("DbUpdateAndInsert: insert website tick: %w", err)
 	}
-	if _, err = tx.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`UPDATE "UserWebsite"
 		SET
 			next_tick = $1,
@@ -131,15 +115,32 @@ func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage,
 		AND
 			website_id = $4;
 		`,
-		job.NextTick,
+		nextTick,
 		time.Now(),
-		job.UserID,
-		job.WebsiteID,
-	); err != nil {
+		monitorJob.UserID,
+		monitorJob.WebsiteID,
+	)
+	if err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: update user website: %w", err)
+	}
+	// Defensive check.
+	// Normally UserWebsite is soft deleted, so this path
+	// should only occur if data has already been cleaned up.
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("DbUpdateAndInsert: user not found: %v", w.AckAndDelete(ctx, msg))
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (w *BaseWorker) AckAndDelete(ctx context.Context, msg *redis.XMessage) error {
+	tx := w.rds.TxPipeline()
+	tx.XAck(ctx, sh.JobStreamKey, sh.Workers, msg.ID)
+	tx.XDel(ctx, sh.JobStreamKey, msg.ID)
+	if _, err := tx.Exec(ctx); err != nil {
+		return fmt.Errorf("redis transaction: %w", err)
 	}
 	return nil
 }

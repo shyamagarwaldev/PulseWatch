@@ -3,34 +3,35 @@ package scheduler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
-	job "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
-	key "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
+	sh "github.com/shyamagarwaldev/PulseWatch/monitor/internals/shared"
 )
 
 type Scheduler struct {
 	// *priority_queue --> redis sorted set
-	db  *pgx.Conn
+	db  *pgxpool.Pool
 	rds *redis.Client
 }
 
 func (sche *Scheduler) Init(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return fmt.Errorf("connect postgres: %w", err)
 	}
-	err = conn.Ping(ctx)
+	err = pool.Ping(ctx)
 	if err != nil {
 		return fmt.Errorf("ping db: %w", err)
 	}
 	fmt.Println("Successfully connected to postgres server!")
-	sche.db = conn
+	sche.db = pool
 	sche.rds = redis.NewClient(&redis.Options{
 		Addr: os.Getenv("REDIS_ADDR"),
 	})
@@ -39,9 +40,11 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 		return fmt.Errorf("ping scheduler redis: %w", err)
 	}
 	fmt.Println("Successfully connected to Redis server!", s)
-	err = sche.rds.Del(ctx, key.SchedulerQueueKey).Err()
-	if err != nil {
-		return fmt.Errorf("clear scheduler queue: %w", err)
+	tx := sche.rds.TxPipeline()
+	tx.Del(ctx, sh.HashKey)
+	tx.Del(ctx, sh.SchedulerQueueKey)
+	if _, err := tx.Exec(ctx); err != nil {
+		return fmt.Errorf("clear scheduler cache: %w", err)
 	}
 	return nil
 }
@@ -53,7 +56,7 @@ func (sche *Scheduler) Run() {
 		log.Fatal(err)
 	}
 
-	defer sche.db.Close(ctx)
+	defer sche.db.Close()
 	defer sche.rds.Close()
 
 	if err := sche.LoadJobs(ctx); err != nil {
@@ -78,37 +81,37 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("query scheduler jobs: %w", err)
 	}
-	jobs, err := pgx.CollectRows(rows, pgx.RowToStructByName[job.JobEvent])
+	jobs, err := pgx.CollectRows(rows, pgx.RowToStructByName[sh.JobEvent])
 
 	if err != nil {
 		return fmt.Errorf("collect scheduler jobs: %w", err)
 	}
-
-	for _, job := range jobs {
-		b, err := json.Marshal(job)
+	tx := sche.rds.TxPipeline()
+	// O(M * log M)
+	for _, monitorJob := range jobs {
+		b, err := json.Marshal(monitorJob)
 		if err != nil {
 			return fmt.Errorf(
 				"marshal job (user=%s website=%s): %w",
-				job.UserID,
-				job.WebsiteID,
+				monitorJob.UserID,
+				monitorJob.WebsiteID,
 				err,
 			)
 		}
-		err = sche.rds.ZAdd(ctx,
-			key.SchedulerQueueKey,
+		el := sh.CreateEl(monitorJob.UserID, monitorJob.WebsiteID)
+		// O (logM)
+		tx.ZAdd(ctx,
+			sh.SchedulerQueueKey,
 			redis.Z{
-				Score:  float64(job.NextTick.UnixMilli()), // -> see this later
-				Member: string(b),
+				Score:  float64(monitorJob.NextTick.UnixMilli()), // -> see this later
+				Member: el,
 			},
-		).Err()
-		if err != nil {
-			return fmt.Errorf(
-				"enqueue job into scheduler queue (user=%s website=%s): %w",
-				job.UserID,
-				job.WebsiteID,
-				err,
-			)
-		}
+		)
+		// O (1)
+		tx.HSet(ctx, sh.HashKey, el, string(b))
+	}
+	if _, err := tx.Exec(ctx); err != nil {
+		return fmt.Errorf("load jobs tx: %w", err)
 	}
 	return nil
 }
@@ -122,8 +125,9 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 		case <-ticker.C:
 			// TODO: perform scheduled work
 			now := time.Now().UnixMilli()
+			// O (M + Log N)
 			members, err := sche.rds.ZRangeArgs(ctx, redis.ZRangeArgs{
-				Key:     key.SchedulerQueueKey,
+				Key:     sh.SchedulerQueueKey,
 				Start:   "-inf",
 				Stop:    fmt.Sprintf("%d", now),
 				ByScore: true,
@@ -132,33 +136,35 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 				log.Printf("scheduler: fetch due jobs: %v", err)
 				continue
 			}
-			for _, m := range members {
+			// O (M * Log N)
+			for _, el := range members {
 				select {
 				case <-ctx.Done():
 					return
 				default:
-					var jobMonitor job.JobEvent
-					err := json.Unmarshal([]byte(m), &jobMonitor)
+					_, err := sche.rds.HGet(ctx, sh.HashKey, el).Result()
+					if errors.Is(err, redis.Nil) {
+						if err = sche.rds.ZRem(ctx, sh.SchedulerQueueKey, el).Err(); err != nil {
+							log.Printf("scheduler: Zrem err as el not exist %v", err)
+						}
+						continue
+					}
 					if err != nil {
-						log.Printf("scheduler: unmarshal job payload: %v", err)
+						log.Printf("scheduler: HGet: %v", err)
 						continue
 					}
 					tx := sche.rds.TxPipeline()
 					tx.XAdd(ctx, &redis.XAddArgs{
-						Stream: key.JobStreamKey,
+						Stream: sh.JobStreamKey,
 						Values: map[string]string{
-							"payload": m,
+							"payload": el,
 						},
 					})
-					tx.ZRem(ctx,
-						key.SchedulerQueueKey,
-						m,
-					)
+					tx.ZRem(ctx, sh.SchedulerQueueKey, el)
 					if _, err = tx.Exec(ctx); err != nil {
-						log.Printf("scheduler: Tx err: %v,", err)
+						log.Printf("scheduler: transaction failed: %v", err)
 						continue
 					}
-
 				}
 			}
 		case <-ctx.Done():
