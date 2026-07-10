@@ -27,7 +27,7 @@ model User {
 model Website {
   id           String        @id @default(uuid())
   url          String        @unique
-  createdAt    DateTime      @default(now())
+  created_at   DateTime      @default(now())
   user_website UserWebsite[]
   websiteTicks WebsiteTick[]
   outBoxes     OutBox[]
@@ -40,7 +40,7 @@ model UserWebsite {
   time_added       DateTime
   next_tick        DateTime
   last_tick        DateTime?
-  isActive         Boolean   @default(true)
+  is_active        Boolean   @default(true)
 
   user         User          @relation(fields: [user_id], references: [id])
   website      Website       @relation(fields: [website_id], references: [id])
@@ -70,7 +70,7 @@ model OutBox {
   website_id  String
   task        OutBoxTask
   task_status TaskStatus
-  createdAt   DateTime   @default(now())
+  created_at  DateTime   @default(now())
   updated_at  DateTime   @default(now())
   user        User       @relation(fields: [user_id], references: [id])
   website     Website    @relation(fields: [website_id], references: [id])
