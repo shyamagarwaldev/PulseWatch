@@ -22,7 +22,20 @@ type NormalWorker struct {
 
 func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
+	}
+	jobs := make(chan redis.XMessage, sh.BatchSize)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer close(jobs)
+	for range sh.WorkerCount {
+		wg.Go(func() {
+			for msg := range jobs {
+				if err := w.ProcessMessage(ctx, &msg, client); err != nil {
+					log.Printf("normal worker: ProcessMessage: process %s: %v", msg.ID, err)
+				}
+			}
+		})
 	}
 	hostname, _ := os.Hostname()
 	for {
@@ -30,33 +43,28 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			streams, err := w.rds.XReadGroup(ctx, &redis.XReadGroupArgs{
-				Group:    sh.Workers,
-				Consumer: fmt.Sprintf("NormalWorker: %v", hostname),
-				Streams:  []string{sh.JobStreamKey, ">"},
-				Count:    10,
-				Block:    5 * time.Second,
-			}).Result()
-			if err == redis.Nil {
-				continue
-			}
-			if err != nil {
-				log.Printf("normal worker: read group: %v", err)
-				continue
-			}
-			for _, stream := range streams {
-				var wg sync.WaitGroup
-				for _, msg := range stream.Messages {
-					wg.Add(1)
-					go func(m redis.XMessage) {
-						defer wg.Done()
-						if err := w.ProcessMessage(ctx, &m, client); err != nil {
-							log.Printf("normal worker: ProcessMessage: process %s: %v", m.ID, err)
-						}
-					}(msg)
-
+		}
+		streams, err := w.rds.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    sh.Workers,
+			Consumer: fmt.Sprintf("NormalWorker: %v", hostname),
+			Streams:  []string{sh.JobStreamKey, ">"},
+			Count:    sh.BatchSize,
+			Block:    5 * time.Second,
+		}).Result()
+		if err == redis.Nil {
+			continue
+		}
+		if err != nil {
+			log.Printf("normal worker: read group: %v", err)
+			continue
+		}
+		for _, stream := range streams {
+			for _, msg := range stream.Messages {
+				select {
+				case jobs <- msg:
+				case <-ctx.Done():
+					return
 				}
-				wg.Wait()
 			}
 		}
 

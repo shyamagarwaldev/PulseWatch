@@ -20,3 +20,8 @@ type Duration int
 const (
 	OutBoxLoopDuration = 60
 )
+
+const (
+	WorkerCount = 20
+	BatchSize   = 50
+)

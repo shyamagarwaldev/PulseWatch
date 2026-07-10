@@ -25,6 +25,19 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
+	jobs := make(chan redis.XMessage, sh.BatchSize)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer close(jobs)
+	for range sh.WorkerCount {
+		wg.Go(func() {
+			for msg := range jobs {
+				if err := w.ProcessMessage(ctx, &msg, client); err != nil {
+					log.Printf("recovery worker: process: %s: %v", msg.ID, err)
+				}
+			}
+		})
+	}
 	hostname, _ := os.Hostname()
 	start := "0-0"
 	ticker := time.NewTicker(30 * time.Second)
@@ -40,7 +53,7 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 				Consumer: fmt.Sprintf("RecoveryWorker: %v", hostname),
 				MinIdle:  120 * time.Second,
 				Start:    start,
-				Count:    10,
+				Count:    sh.BatchSize,
 			}).Result()
 			if err == redis.Nil {
 				continue
@@ -49,18 +62,13 @@ func (w *RecoveryWorker) WorkerLoop(ctx context.Context) {
 				log.Printf("recovery worker: xautoclaim: %v", err)
 				continue
 			}
-			var wg sync.WaitGroup
 			for _, msg := range messages {
-				wg.Add(1)
-				go func(m redis.XMessage) {
-					defer wg.Done()
-					if err := w.ProcessMessage(ctx, &m, client); err != nil {
-						log.Printf("recovery worker: process: %s: %v", m.ID, err)
-					}
-				}(msg)
-
+				select {
+				case jobs <- msg:
+				case <-ctx.Done():
+					return
+				}
 			}
-			wg.Wait()
 			start = st
 		}
 	}
