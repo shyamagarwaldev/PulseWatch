@@ -47,13 +47,10 @@ func (out *OutBox) Init(ctx context.Context) error {
 	return nil
 }
 
-func (out *OutBox) Run() {
-	ctx := context.Background()
-
+func (out *OutBox) Run(ctx context.Context) {
 	if err := out.Init(ctx); err != nil {
 		log.Fatal(err)
 	}
-
 	defer out.db.Close()
 	defer out.rds.Close()
 

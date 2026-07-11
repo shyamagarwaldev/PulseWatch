@@ -101,25 +101,26 @@ func (w *RecoveryWorker) ProcessMessage(ctx context.Context, msg *redis.XMessage
 	default:
 		return fmt.Errorf("idempotency query: %w", err)
 	}
-	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, monitorJob.URL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
+	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http worker check: %w", err)
 	}
 	defer resp.Body.Close()
+	finish := time.Now()
+	latency := finish.Sub(start).Milliseconds() // in ms
 	success := resp.StatusCode >= 200 && resp.StatusCode < 300
-	latency := time.Since(start).Milliseconds() // in ms
-	nextTick := time.Now().Add(time.Duration(monitorJob.Interval) * time.Second)
+	nextTick := finish.Add(time.Duration(monitorJob.Interval) * time.Second)
 	status := "Down"
 	if success {
 		status = "Up"
 	}
 
-	if err := w.DbUpdateAndInsert(ctx, msg, nextTick, &monitorJob, int64(latency), status); err != nil {
+	if err := w.DbUpdateAndInsert(ctx, msg, nextTick, finish, &monitorJob, int64(latency), status); err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: %w", err)
 	}
 
@@ -151,9 +152,7 @@ func (w *RecoveryWorker) RecoverIncompleteProcessing(ctx context.Context, monito
 	return nil
 }
 
-func (w *RecoveryWorker) Run() {
-	ctx := context.Background()
-
+func (w *RecoveryWorker) Run(ctx context.Context) {
 	if err := w.Init(ctx); err != nil {
 		log.Fatal(err)
 	}

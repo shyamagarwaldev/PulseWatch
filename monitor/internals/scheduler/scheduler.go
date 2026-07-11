@@ -48,9 +48,7 @@ func (sche *Scheduler) Init(ctx context.Context) error {
 	return nil
 }
 
-func (sche *Scheduler) Run() {
-	ctx := context.Background()
-
+func (sche *Scheduler) Run(ctx context.Context) {
 	if err := sche.Init(ctx); err != nil {
 		log.Fatal(err)
 	}
@@ -76,7 +74,7 @@ func (sche *Scheduler) LoadJobs(ctx context.Context) error {
 		FROM "UserWebsite" uw
 		JOIN "Website" w
 		ON uw.website_id = w.id
-		WHERE uw.isActive = true;
+		WHERE uw.is_active;
     `)
 	if err != nil {
 		return fmt.Errorf("query scheduler jobs: %w", err)

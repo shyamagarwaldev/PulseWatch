@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -23,7 +24,6 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
 	config.MaxConns = 20
 	config.MinConns = 5
 	pool, err := pgxpool.NewWithConfig(ctx, config)
@@ -34,7 +34,7 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping db: %w", err)
 	}
-	fmt.Println("Successfully connected to postgres server!")
+	log.Printf("Successfully connected to postgres server!")
 	base.db = pool
 	base.rds = redis.NewClient(&redis.Options{
 		Addr: os.Getenv("REDIS_ADDR"),
@@ -44,14 +44,13 @@ func (base *BaseWorker) Init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping scheduler redis: %w", err)
 	}
-	fmt.Println("Successfully connected to Redis server!", s)
+	log.Printf("Successfully connected to Redis server! %v", s)
 	err = base.rds.XGroupCreateMkStream(
 		ctx,
 		sh.JobStreamKey,
 		sh.Workers,
 		"$",
 	).Err()
-
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		return fmt.Errorf("create consumer group: %w", err)
 	}
@@ -79,7 +78,7 @@ func (w *BaseWorker) CacheUpdateAndStreamAck(ctx context.Context, nextTick time.
 	return nil
 }
 
-func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage, nextTick time.Time, monitorJob *sh.JobEvent, latency int64, status string) error {
+func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage, nextTick time.Time, lastTick time.Time, monitorJob *sh.JobEvent, latency int64, status string) error {
 	tx, err := w.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: begin transaction: %w", err)
@@ -91,23 +90,25 @@ func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage,
 					website_id,
 					user_id,
 					latency_ms,
-					status
+					status,
+					timestamp 
 				)
 				VALUES
-				($1,$2,$3,$4,$5)
+				($1,$2,$3,$4,$5,$6)
 				`,
 		msg.ID,
 		monitorJob.WebsiteID,
 		monitorJob.UserID,
 		latency,
 		status,
+		lastTick,
 	)
 	if err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: insert website tick: %w", err)
 	}
 	tag, err := tx.Exec(ctx,
 		`UPDATE "UserWebsite"
-		SET
+		SET	
 			next_tick = $1,
 			last_tick = $2
 		WHERE
@@ -116,7 +117,7 @@ func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage,
 			website_id = $4;
 		`,
 		nextTick,
-		time.Now(),
+		lastTick,
 		monitorJob.UserID,
 		monitorJob.WebsiteID,
 	)
@@ -127,7 +128,10 @@ func (w *BaseWorker) DbUpdateAndInsert(ctx context.Context, msg *redis.XMessage,
 	// Normally UserWebsite is soft deleted, so this path
 	// should only occur if data has already been cleaned up.
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("DbUpdateAndInsert: user not found: %v", w.AckAndDelete(ctx, msg))
+		if err := w.AckAndDelete(ctx, msg); err != nil {
+			return fmt.Errorf("DbUpdateAndInsert: ack orphan message: %w", err)
+		}
+		return fmt.Errorf("DbUpdateAndInsert: user website not found")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("DbUpdateAndInsert: commit transaction: %w", err)

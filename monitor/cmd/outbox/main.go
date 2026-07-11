@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/shyamagarwaldev/PulseWatch/monitor/internals/scheduler"
+	"github.com/shyamagarwaldev/PulseWatch/monitor/internals/outbox"
 )
 
 func main() {
@@ -16,6 +16,6 @@ func main() {
 		syscall.SIGTERM,
 	)
 	defer stop()
-	sche := &scheduler.Scheduler{}
-	sche.Run(ctx)
+	outbox := &outbox.OutBox{}
+	outbox.Run(ctx)
 }
