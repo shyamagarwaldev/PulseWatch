@@ -22,20 +22,29 @@ export const addWebsite = AsyncHandler(async (req, res) => {
     update: {},
     create: { url: data.url },
   });
-  const userWebsite = await prisma.userWebsite.create({
-    data: {
-      user_id: id,
-      website_id: web.id,
-      interval_seconds: data.interval,
-      time_added: new Date(),
-      next_tick: new Date(Date.now() + data.interval * 1000),
-    },
-  });
+  const result = await prisma.$transaction([
+    prisma.userWebsite.create({
+      data: {
+        user_id: id,
+        website_id: web.id,
+        interval_seconds: data.interval,
+        time_added: new Date(),
+        next_tick: new Date(Date.now() + data.interval * 1000),
+      },
+    }),
+    prisma.outBox.create({
+      data: {
+        task: "Add",
+        user_id: id,
+        website_id: web.id,
+      },
+    }),
+  ]);
   res.status(201).json(
     new ApiResponse({
       message: "successfully created added the website to monitor",
       statusCode: 201,
-      data: userWebsite,
+      data: result[0],
     }),
   );
 });

@@ -65,11 +65,11 @@ model WebsiteTick {
 }
 
 model OutBox {
-  id          String     @id
+  id          String     @id @default(uuid())
   user_id     String
   website_id  String
   task        OutBoxTask
-  task_status TaskStatus
+  task_status TaskStatus @default(UnProcessed)
   created_at  DateTime   @default(now())
   updated_at  DateTime   @default(now())
   user        User       @relation(fields: [user_id], references: [id])
