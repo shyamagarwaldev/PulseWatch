@@ -1,6 +1,6 @@
 import { VerifyToken } from "../lib/Tokens";
 import { AsyncHandler } from "../lib/AsyncHandler";
-import { UnauthorisedRequestError } from "../lib/ApiError";
+import { ForbiddenError, UnauthorisedRequestError } from "../lib/ApiError";
 import { TokenType } from "../types/auth";
 
 export const auth = AsyncHandler(async (req, res, next) => {
@@ -10,7 +10,7 @@ export const auth = AsyncHandler(async (req, res, next) => {
   if (!token) throw new UnauthorisedRequestError("Access token missing");
   let verifiedToken = VerifyToken(token);
   if (verifiedToken.type !== TokenType.ACCESS)
-    throw new UnauthorisedRequestError("Invalid Access Token");
+    throw new ForbiddenError("Invalid Access Token");
   req.userInfo = verifiedToken;
   next();
 });

@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import { AsyncHandler } from "../../lib/AsyncHandler";
 import { BadRequestError, UnauthorisedRequestError } from "../../lib/ApiError";
 import { UserSignInSchema, UserSignUpSchema } from "../../schemas/users.schema";
-import { handleZodError, ZodCustomError } from "../../lib/ZodError";
+import { ZodCustomError } from "../../lib/ZodError";
 import { CreateToken } from "../../lib/Tokens";
 import { ApiResponse } from "../../lib/ApiResponse";
 import jwt from "jsonwebtoken";
@@ -96,7 +96,7 @@ export const signin = AsyncHandler(async (req, res) => {
 export const refresh = AsyncHandler(async (req, res) => {
   const refreshToken = req.cookies.refreshToken;
 
-  if (!refreshToken) throw new BadRequestError("User is Logged Out");
+  if (!refreshToken) throw new BadRequestError("refresh token is required");
 
   const verifiedToken = jwt.verify(
     refreshToken,

@@ -3,7 +3,7 @@ import { logout, refresh, signin, signup } from "./users.controller";
 import { auth } from "../../middlewares/auth.middleware";
 
 const userRouter = Router();
-userRouter.put("/refresh", refresh);
+userRouter.post("/refresh", refresh);
 userRouter.post("/signup", signup);
 userRouter.post("/signin", signin);
 

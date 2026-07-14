@@ -49,6 +49,39 @@ export const addWebsite = AsyncHandler(async (req, res) => {
   );
 });
 
+const getWebsiteInfo = AsyncHandler(async (req, res) => {
+  const user_id = req.userInfo.id;
+  const website_id = req.query.id as string;
+  if (!website_id) {
+    throw new BadRequestError("website id is required");
+  }
+  const websiteInfo = await prisma.userWebsite.findUnique({
+    where: {
+      user_id_website_id: {
+        user_id,
+        website_id,
+      },
+    },
+    include: {
+      websiteTicks: {
+        orderBy: [
+          {
+            timestamp: "desc",
+          },
+        ],
+        take: 1,
+      },
+    },
+  });
+  res.json(200).json(
+    new ApiResponse({
+      statusCode: 200,
+      message: "successfully fetched website info",
+      data: websiteInfo,
+    }),
+  );
+});
+
 export const getStatus = AsyncHandler(async (req, res) => {
   const { id } = req.userInfo;
   const { data, error, success } = WebsiteStatusSchema.safeParse(req.query);
