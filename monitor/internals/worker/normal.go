@@ -49,7 +49,7 @@ func (w *NormalWorker) WorkerLoop(ctx context.Context) {
 			Consumer: fmt.Sprintf("NormalWorker: %v", hostname),
 			Streams:  []string{sh.JobStreamKey, ">"},
 			Count:    sh.BatchSize,
-			Block:    5 * time.Second,
+			Block:    0,
 		}).Result()
 		if err == redis.Nil {
 			continue

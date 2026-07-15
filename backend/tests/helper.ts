@@ -27,12 +27,28 @@ export async function createUserAndLogin() {
   const response = await fetch(`${BACKEND_URL}/user/signin`, {
     method: "POST",
     headers: {
-      "CONTENT-TYPE": "application/json",
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       username,
       password,
     }),
   });
+  return response;
+}
+
+export async function addWebsite(r: Response) {
+  const response = await fetch(`${BACKEND_URL}/website/addWebsite`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Cookie: r.headers.getSetCookie().join("; "),
+    },
+    body: JSON.stringify({
+      url: "https://google.com",
+      interval: 30,
+    }),
+  });
+
   return response;
 }
