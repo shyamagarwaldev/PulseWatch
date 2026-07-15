@@ -6,7 +6,7 @@ import {
 import { ApiResponse } from "../../lib/ApiResponse";
 import { AsyncHandler } from "../../lib/AsyncHandler";
 import { ZodCustomError } from "../../lib/ZodError";
-import { BadRequestError } from "../../lib/ApiError";
+import { BadRequestError, NotFoundError } from "../../lib/ApiError";
 
 export const addWebsite = AsyncHandler(async (req, res) => {
   const { id } = req.userInfo;
@@ -15,7 +15,7 @@ export const addWebsite = AsyncHandler(async (req, res) => {
   if (!success) {
     throw new ZodCustomError(error);
   }
-  const web = await prisma.website.upsert({
+  const website = await prisma.website.upsert({
     where: {
       url: data.url,
     },
@@ -26,7 +26,7 @@ export const addWebsite = AsyncHandler(async (req, res) => {
     prisma.userWebsite.create({
       data: {
         user_id: id,
-        website_id: web.id,
+        website_id: website.id,
         interval_seconds: data.interval,
         time_added: new Date(),
         next_tick: new Date(Date.now() + data.interval * 1000),
@@ -36,26 +36,50 @@ export const addWebsite = AsyncHandler(async (req, res) => {
       data: {
         task: "Add",
         user_id: id,
-        website_id: web.id,
+        website_id: website.id,
       },
     }),
   ]);
   res.status(201).json(
     new ApiResponse({
-      message: "successfully created added the website to monitor",
+      message: "successfully added the website to monitor",
       statusCode: 201,
       data: result[0],
     }),
   );
 });
 
-const getWebsiteInfo = AsyncHandler(async (req, res) => {
+export const getWebsites = AsyncHandler(async (req, res) => {
   const user_id = req.userInfo.id;
-  const website_id = req.query.id as string;
+  const websites = await prisma.userWebsite.findMany({
+    where: {
+      user_id,
+    },
+    include: {
+      website: {
+        select: {
+          url: true,
+        },
+      },
+    },
+  });
+
+  res.status(200).json(
+    new ApiResponse({
+      statusCode: 200,
+      message: "successfully fetched the websites",
+      data: websites,
+    }),
+  );
+});
+
+export const getStatus = AsyncHandler(async (req, res) => {
+  const user_id = req.userInfo.id;
+  const website_id = req.params.websiteId as string;
   if (!website_id) {
     throw new BadRequestError("website id is required");
   }
-  const websiteInfo = await prisma.userWebsite.findUnique({
+  const websiteStatus = await prisma.userWebsite.findUnique({
     where: {
       user_id_website_id: {
         user_id,
@@ -73,16 +97,17 @@ const getWebsiteInfo = AsyncHandler(async (req, res) => {
       },
     },
   });
-  res.json(200).json(
+  if (!websiteStatus) throw new NotFoundError("website not found");
+  res.status(200).json(
     new ApiResponse({
       statusCode: 200,
-      message: "successfully fetched website info",
-      data: websiteInfo,
+      message: "successfully fetched website status",
+      data: websiteStatus,
     }),
   );
 });
 
-export const getStatus = AsyncHandler(async (req, res) => {
+export const getTicks = AsyncHandler(async (req, res) => {
   const { id } = req.userInfo;
   const { data, error, success } = WebsiteStatusSchema.safeParse(req.query);
   if (!success) {
@@ -99,7 +124,7 @@ export const getStatus = AsyncHandler(async (req, res) => {
   if (!website) {
     throw new BadRequestError("Invalid Website");
   }
-  const status = await prisma.websiteTick.findMany({
+  const ticks = await prisma.websiteTick.findMany({
     where: {
       website_id: data.website_id,
       user_id: id,
@@ -114,10 +139,9 @@ export const getStatus = AsyncHandler(async (req, res) => {
 
   res.status(200).json(
     new ApiResponse({
-      message: "successfully get the status",
-      data: status,
+      message: "successfully get the ticks",
+      data: ticks,
       statusCode: 200,
     }),
   );
-  return;
 });
