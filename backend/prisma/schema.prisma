@@ -19,32 +19,32 @@ model User {
   created_at    DateTime @default(now())
   refresh_token String?
 
-  websites     UserWebsite[]
-  websiteTicks WebsiteTick[]
-  outBoxes     OutBox[]
+  websites      UserWebsite[]
+  website_ticks WebsiteTick[]
+  outBoxes      OutBox[]
 }
 
 model Website {
-  id           String        @id @default(uuid())
-  url          String        @unique
-  created_at   DateTime      @default(now())
-  user_website UserWebsite[]
-  websiteTicks WebsiteTick[]
-  outBoxes     OutBox[]
+  id            String        @id @default(uuid())
+  url           String        @unique
+  created_at    DateTime      @default(now())
+  user_website  UserWebsite[]
+  website_ticks WebsiteTick[]
+  outBoxes      OutBox[]
 }
 
 model UserWebsite {
   user_id          String
   website_id       String
-  interval_seconds Int       @default(30)
+  interval_seconds Int       @default(300)
   time_added       DateTime
   next_tick        DateTime
   last_tick        DateTime?
   is_active        Boolean   @default(true)
 
-  user         User          @relation(fields: [user_id], references: [id])
-  website      Website       @relation(fields: [website_id], references: [id])
-  websiteTicks WebsiteTick[]
+  user          User          @relation(fields: [user_id], references: [id])
+  website       Website       @relation(fields: [website_id], references: [id])
+  website_ticks WebsiteTick[]
 
   @@id([user_id, website_id])
 }

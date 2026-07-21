@@ -15,10 +15,11 @@ import (
 )
 
 type Scheduler struct {
-	// *priority_queue --> redis sorted set
 	db  *pgxpool.Pool
 	rds *redis.Client
 }
+
+const batch = 1000
 
 func (sche *Scheduler) Init(ctx context.Context) error {
 	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
@@ -126,40 +127,44 @@ func (sche *Scheduler) SchedulerLoop(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			// TODO: perform scheduled work
-			now := time.Now().UnixMilli()
-			// O (M + Log N)
-			members, err := sche.rds.ZRangeArgs(ctx, redis.ZRangeArgs{
-				Key:     sh.SchedulerQueueKey,
-				Start:   "-inf",
-				Stop:    fmt.Sprintf("%d", now),
-				ByScore: true,
-			}).Result()
-			if err != nil {
-				log.Printf("scheduler: fetch due jobs: %v", err)
-				continue
-			}
-			// O (M * Log N)
-			for _, el := range members {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					tx := sche.rds.TxPipeline()
-					tx.XAdd(ctx, &redis.XAddArgs{
-						Stream: sh.JobStreamKey,
-						Values: map[string]string{
-							"payload": el,
-						},
-					})
-					tx.ZRem(ctx, sh.SchedulerQueueKey, el)
-					if _, err = tx.Exec(ctx); err != nil {
-						log.Printf("scheduler: transaction failed: %v", err)
-						continue
-					}
-				}
+			if err := sche.ProcessOnce(ctx); err != nil {
+				log.Printf("scheduler: %v \n", err)
 			}
 		case <-ctx.Done():
 			return
 		}
 	}
+}
+
+func (sche *Scheduler) ProcessOnce(ctx context.Context) error {
+	now := time.Now().UnixMilli()
+	// O (M + Log N)
+	members, err := sche.rds.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     sh.SchedulerQueueKey,
+		Start:   "-inf",
+		Stop:    fmt.Sprintf("%d", now),
+		ByScore: true,
+	}).Result()
+	if err != nil {
+		return fmt.Errorf("fetch due jobs: %w", err)
+	}
+	// O (M * Log N)
+
+	for i := 0; i < len(members); i += batch {
+		end := min(i+batch, len(members))
+		tx := sche.rds.TxPipeline()
+		for _, el := range members[i:end] {
+			tx.XAdd(ctx, &redis.XAddArgs{
+				Stream: sh.JobStreamKey,
+				Values: map[string]string{
+					"payload": el,
+				},
+			})
+			tx.ZRem(ctx, sh.SchedulerQueueKey, el)
+		}
+		if _, err = tx.Exec(ctx); err != nil {
+			return fmt.Errorf("transaction failed: %w", err)
+		}
+	}
+	return nil
 }
