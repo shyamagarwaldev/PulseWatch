@@ -14,6 +14,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/pg": "^8.20.0",
+    "@types/supertest": "^7.2.1",
     "prisma": "^7.8.0"
   },
   "peerDependencies": {
@@ -31,6 +32,7 @@
     "jsonwebtoken": "^9.0.3",
     "passport-google-oauth": "^2.0.0",
     "pg": "^8.22.0",
+    "supertest": "^7.2.2",
     "zod": "^4.4.3"
   }
 }

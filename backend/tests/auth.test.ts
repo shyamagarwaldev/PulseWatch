@@ -2,40 +2,36 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { createUserAndLogin, signup } from "./helper";
 import type { ApiResponseReturnType } from "../src/types";
 import { BACKEND_URL } from "./setup";
+import app from "../src/app";
+import request, { type Response } from "supertest";
 
 describe("signup endpoints", () => {
   it("is't able to signup if body is incorrect", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/signup`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(400);
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/signup`)
+      .expect(400);
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(400);
     expect(data.message).toBe("Validation Failed");
   });
   it("user already exixt", async () => {
     const { username } = await signup();
-    const response = await fetch(`${BACKEND_URL}/user/signup`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/signup`)
+      .send({
         username,
         password: "123456abc",
-      }),
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(409);
+      })
+      .expect(409);
+    const data = response.body as ApiResponseReturnType;
     expect(data.statusCode).toBe(409);
     expect(data.message).toBe("Resource already exists");
   });
   it("succesful signup", async () => {
     const { response } = await signup();
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(201);
+
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(201);
     expect(data.message).toBe("user created succesfully");
   });
 });
@@ -48,85 +44,82 @@ describe("signin endpoints", () => {
     password = data.password;
   });
   it("successful login", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/signin`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/signin`)
+      .send({
         username,
         password,
-      }),
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(200);
+      })
+      .expect(200);
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(200);
     expect(data.message).toBe("succesfully sign in");
-    expect(response.headers.getSetCookie().length).toBeGreaterThan(0);
+    expect(response.headers["set-cookie"]?.length).toEqual(2);
     expect(data.data).toBeDefined();
   });
 
   it("not able to login due to invalid password", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/signin`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/signin`)
+      .send({
         username,
         password: "wrongpass",
-      }),
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(400);
+      })
+      .expect(400);
+
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(400);
     expect(data.message).toBe("Invalid username or password");
   });
   it("not able to login due to invalid username", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/signin`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/signin`)
+      .send({
         username: "aaaaaaaaaaaaa",
         password,
-      }),
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(400);
+      })
+      .expect(400);
+
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(400);
     expect(data.message).toBe("Invalid username or password");
   });
 });
 describe("refresh access token endpoint", () => {
   let r: Response;
-  // let r2: Response;
   beforeAll(async () => {
     r = await createUserAndLogin();
-    // r2 = await createUserAndLogin();
   });
   it("successful refresh", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/refresh`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: r.headers.getSetCookie().join("; "),
-      },
-    });
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(200);
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/refresh`)
+      .set("Cookie", r.headers["set-cookie"]!)
+      .expect(200);
+
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(200);
     expect(data.message).toBe("succesfully refreshed the token");
   });
 
   it("refresh token is not present", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/refresh`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/refresh`)
+      .expect(400);
 
-    const data = (await response.json()) as ApiResponseReturnType;
-    expect(response.status).toBe(400);
+    const data = response.body as ApiResponseReturnType;
+    expect(data.statusCode).toBe(400);
     expect(data.message).toBe("refresh token is required");
+  });
+
+  it("returns unauthorized for invalid refresh token", async () => {
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/refresh`)
+      .set("Cookie", "refreshToken=invalidtoken");
+
+    const data = response.body as ApiResponseReturnType;
+
+    expect(response.status).toBe(401);
+    expect(data.success).toBe(false);
   });
 });
 describe("logout endpoint", () => {
@@ -136,16 +129,60 @@ describe("logout endpoint", () => {
   });
 
   it("successful logout", async () => {
-    const response = await fetch(`${BACKEND_URL}/user/logout`, {
-      method: "PUT",
-      headers: {
-        Cookie: r.headers.getSetCookie().join("; "),
-      },
-    });
+    const response = await request(app)
+      .put(`${BACKEND_URL}/user/logout`)
+      .set("Cookie", r.headers["set-cookie"]!)
+      .expect(200);
 
-    const data = (await response.json()) as ApiResponseReturnType;
+    const data = response.body as ApiResponseReturnType;
 
-    expect(response.status).toBe(200);
     expect(data.message).toBe("user successfully logout");
+  });
+
+  it("fails when refresh token is missing", async () => {
+    const response = await request(app)
+      .put(`${BACKEND_URL}/user/logout`)
+      .set("Cookie", r.headers["set-cookie"]?.at(0)!)
+      .expect(400);
+
+    const data = response.body as ApiResponseReturnType;
+
+    expect(data.message).toBe("refresh token is required");
+  });
+
+  it("cannot refresh after logout", async () => {
+    const login = await createUserAndLogin();
+    const cookies = login.headers["set-cookie"];
+
+    await request(app)
+      .put(`${BACKEND_URL}/user/logout`)
+      .set("Cookie", cookies!)
+      .expect(200);
+
+    const response = await request(app)
+      .post(`${BACKEND_URL}/user/refresh`)
+      .set("Cookie", cookies!)
+      .expect(401);
+
+    const data = response.body as ApiResponseReturnType;
+
+    expect(data.statusCode).toBe(401);
+    expect(data.success).toBe(false);
+  });
+
+  it("second logout should fail", async () => {
+    const login = await createUserAndLogin();
+    const cookies = login.headers["set-cookie"];
+
+    await request(app)
+      .put(`${BACKEND_URL}/user/logout`)
+      .set("Cookie", cookies!)
+      .expect(200);
+
+    const response = await request(app)
+      .put(`${BACKEND_URL}/user/logout`)
+      .set("Cookie", cookies!);
+
+    expect(response.status).toBe(404); //check this
   });
 });

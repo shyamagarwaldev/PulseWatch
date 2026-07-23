@@ -141,10 +141,16 @@ export const refresh = AsyncHandler(async (req, res) => {
 
 export const logout = AsyncHandler(async (req, res) => {
   const id = req.userInfo.id;
+  if (!req.cookies.refreshToken) {
+    throw new BadRequestError("refresh token is required");
+  }
 
   await prisma.user.update({
     where: {
       id,
+      refresh_token: {
+        not: null,
+      },
     },
     data: {
       refresh_token: null,

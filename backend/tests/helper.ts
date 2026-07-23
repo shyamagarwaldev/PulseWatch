@@ -1,54 +1,39 @@
+import app from "../src/app";
 import { BACKEND_URL } from "./setup";
+import request, { type Response } from "supertest";
 
 export async function signup() {
   const username = `${crypto.randomUUID()}`;
   const password = "password123";
 
-  const res = await fetch(`${BACKEND_URL}/user/signup`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      username,
-      password,
-    }),
-  });
-
+  const response = await request(app)
+    .post(`${BACKEND_URL}/user/signup`)
+    .send({ username, password })
+    .expect(201);
   return {
     username,
     password,
-    response: res,
+    response,
   };
 }
 
 export async function createUserAndLogin() {
   const { username, password } = await signup();
-  const response = await fetch(`${BACKEND_URL}/user/signin`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      username,
-      password,
-    }),
-  });
+  const response = await request(app)
+    .post(`${BACKEND_URL}/user/signin`)
+    .send({ username, password })
+    .expect(200);
+
   return response;
 }
 
 export async function addWebsite(r: Response) {
-  const response = await fetch(`${BACKEND_URL}/website/addWebsite`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Cookie: r.headers.getSetCookie().join("; "),
-    },
-    body: JSON.stringify({
+  const response = await request(app)
+    .post(`${BACKEND_URL}/website/addWebsite`)
+    .set("Cookie", r.headers["set-cookie"]!)
+    .send({
       url: "https://google.com",
       interval: 30,
-    }),
-  });
-
+    });
   return response;
 }
