@@ -4,7 +4,7 @@ import { AsyncHandler } from "../../lib/AsyncHandler";
 import { BadRequestError, UnauthorisedRequestError } from "../../lib/ApiError";
 import { UserSignInSchema, UserSignUpSchema } from "../../schemas/users.schema";
 import { ZodCustomError } from "../../lib/ZodError";
-import { CreateToken } from "../../lib/Tokens";
+import { CreateToken, VerifyToken } from "../../lib/Tokens";
 import { ApiResponse } from "../../lib/ApiResponse";
 import jwt from "jsonwebtoken";
 import { TokenType, type UserJwtPayload } from "../../types/auth";
@@ -98,10 +98,7 @@ export const refresh = AsyncHandler(async (req, res) => {
 
   if (!refreshToken) throw new BadRequestError("refresh token is required");
 
-  const verifiedToken = jwt.verify(
-    refreshToken,
-    process.env.TOKEN_SECRET!,
-  ) as UserJwtPayload;
+  const verifiedToken = VerifyToken(refreshToken);
 
   if (verifiedToken.type !== TokenType.REFRESH) {
     throw new UnauthorisedRequestError("invalid refresh token");
