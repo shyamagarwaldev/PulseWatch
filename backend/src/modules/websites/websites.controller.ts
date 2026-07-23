@@ -87,7 +87,7 @@ export const getStatus = AsyncHandler(async (req, res) => {
       },
     },
     include: {
-      websiteTicks: {
+      website_ticks: {
         orderBy: [
           {
             timestamp: "desc",
