@@ -6,7 +6,8 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target bun",
     "start": "bun prisma migrate deploy && bun ./dist/index.js",
-    "dev": "bun prisma migrate deploy && bun src/index.ts"
+    "dev": "bun prisma migrate deploy && bun src/index.ts",
+    "test": "bunx prisma generate && bunx prisma db push && bun test tests"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
