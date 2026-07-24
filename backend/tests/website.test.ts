@@ -3,7 +3,7 @@ import request, { type Response } from "supertest";
 
 import app from "../src/app";
 import { BACKEND_URL } from "./setup";
-import { addWebsite, createUserAndLogin } from "./helper";
+import { addWebsite, createUserAndLogin } from "./helpers/helper";
 import type { ApiResponseReturnType } from "../src/types";
 import type { UserWebsite } from "../src/generated/prisma/client";
 

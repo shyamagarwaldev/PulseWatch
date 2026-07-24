@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from "bun:test";
-import { createUserAndLogin, signup } from "./helper";
+import { createUserAndLogin, signup } from "./helpers/helper";
 import type { ApiResponseReturnType } from "../src/types";
 import { BACKEND_URL } from "./setup";
 import app from "../src/app";

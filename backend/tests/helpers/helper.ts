@@ -1,5 +1,5 @@
-import app from "../src/app";
-import { BACKEND_URL } from "./setup";
+import app from "../../src/app";
+import { BACKEND_URL } from "../setup";
 import request, { type Response } from "supertest";
 
 export async function signup() {
