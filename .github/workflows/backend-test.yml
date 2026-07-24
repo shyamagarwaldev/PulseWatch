@@ -12,6 +12,21 @@ jobs:
   build-and-test:
     name: build backend
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_DB: db
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/db
       JWT_SECRET: test-secret
@@ -23,5 +38,9 @@ jobs:
         with:
           bun-version: latest
       - name: checkout backend and test
-        working-directory: backend
-        run: bun run test
+        run: |
+          cd backend
+          bun install
+          bun prisma generate
+          bun prisma db push
+          bun test

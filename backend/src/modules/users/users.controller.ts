@@ -6,8 +6,7 @@ import { UserSignInSchema, UserSignUpSchema } from "../../schemas/users.schema";
 import { ZodCustomError } from "../../lib/ZodError";
 import { CreateToken, VerifyToken } from "../../lib/Tokens";
 import { ApiResponse } from "../../lib/ApiResponse";
-import jwt from "jsonwebtoken";
-import { TokenType, type UserJwtPayload } from "../../types/auth";
+import { TokenType } from "../../types/auth";
 
 export const signup = AsyncHandler(async (req, res) => {
   const { data, error, success } = UserSignUpSchema.safeParse(req.body);
